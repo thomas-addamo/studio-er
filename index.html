@@ -305,6 +305,8 @@ pre.sql { font: 400 12px/1.55 var(--f-mono); background: var(--surface-2); borde
       <button class="tool" data-tool="note" title="Nota (N)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 4h16v11l-5 5H4z M15 20v-5h5" stroke-linejoin="round"/></svg><span class="k">N</span></button>
       <hr>
       <button class="tool" data-tool="connect" title="Collega due elementi (C)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="5.5" r="2.5"/><path d="M7.3 16.7 16.7 7.3"/></svg><span class="k">C</span></button>
+      <hr>
+      <button class="tool" id="optMoveAttrs" aria-pressed="false" title="Sposta gli attributi insieme all'entità (M)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="9" y="3.5" width="12" height="7" rx="1"/><path d="M12 14.5 6.5 19M15 10.5v4l4 4"/><circle cx="5" cy="20" r="2"/><circle cx="19.5" cy="19.5" r="2"/></svg><span class="k">M</span></button>
     </nav>
 
     <section class="stage" id="stage" data-tool="select">
@@ -801,10 +803,19 @@ const HINTS = {
   note: '<b>Nota</b> · clicca per aggiungere un commento al diagramma',
   connect: '<b>Collega</b> · trascina da un elemento a un altro, oppure clicca il primo e poi il secondo'
 };
+let moveAttrs = false; const MOVEATTRS_KEY = 'studio-er:moveattrs';
+// con l'opzione attiva, trascinare un'entità (o relazione) porta con sé i suoi attributi, anche compositi
+function withAttrs(ids) {
+  if (!moveAttrs) return ids;
+  const out = new Set(ids);
+  const walk = id => { for (const { o } of nb(id)) if (o.type === 'attribute' && !out.has(o.id)) { out.add(o.id); walk(o.id); } };
+  for (const id of ids) { const n = byId(id); if (n.type === 'entity' || n.type === 'relationship') walk(id); }
+  return [...out];
+}
 function setTool(t) {
   tool = t; pendingConnect = null; gOver.innerHTML = '';
   stage.dataset.tool = t;
-  document.querySelectorAll('.tool').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+  document.querySelectorAll('.tool[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
   $('#hint').innerHTML = HINTS[t];
 }
 
@@ -853,7 +864,7 @@ svg.addEventListener('pointerdown', ev => {
     const id = nodeEl.dataset.node;
     if (ev.shiftKey || ev.metaKey || ev.ctrlKey) { sel.has(id) ? sel.delete(id) : sel.add(id); }
     else if (!sel.has(id)) sel = new Set([id]);
-    const ids = [...sel].filter(byId);
+    const ids = withAttrs([...sel].filter(byId));
     gesture = { kind: 'drag', start: p, ids, orig: ids.map(i => { const n = byId(i); return { id: i, x: n.x, y: n.y }; }), anchor: id, moved: false };
     renderCanvas(); renderPanel();
     return;
@@ -1033,13 +1044,14 @@ document.addEventListener('keydown', ev => {
   if (ev.key === 'Escape') { if (pendingConnect) { pendingConnect = null; gOver.innerHTML = ''; renderCanvas(); } else if (tool !== 'select') setTool('select'); else { sel.clear(); commit(); } return; }
   if (ev.key === 'Enter' || ev.key === 'F2') { const ids = [...sel].filter(byId); if (ids.length === 1) { ev.preventDefault(); startInlineEdit(ids[0]); } return; }
   if (ev.key.startsWith('Arrow')) {
-    const ids = [...sel].filter(byId); if (!ids.length) return; ev.preventDefault();
+    const ids = withAttrs([...sel].filter(byId)); if (![...sel].some(byId)) return; ev.preventDefault();
     const d = ev.shiftKey ? GRID : (snap ? GRID / 2 : 2);
     const dx = ev.key === 'ArrowLeft' ? -d : ev.key === 'ArrowRight' ? d : 0, dy = ev.key === 'ArrowUp' ? -d : ev.key === 'ArrowDown' ? d : 0;
     checkpoint(); ids.forEach(i => { const n = byId(i); n.x += dx; n.y += dy; }); commit(); return;
   }
   const map = { v: 'select', h: 'hand', e: 'entity', w: 'weak', r: 'relationship', a: 'attribute', g: 'isa', n: 'note', c: 'connect' };
   if (map[k]) { setTool(map[k]); return; }
+  if (k === 'm') { $('#optMoveAttrs').click(); return; }
   if (k === '+' || k === '=') zoomCenter(1.2);
   else if (k === '-') zoomCenter(1 / 1.2);
   else if (k === '0') { const r = svg.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1 / view.k); }
@@ -1331,6 +1343,7 @@ function projectPanel() {
     <kbd>Ctrl Z / Ctrl ⇧ Z</kbd><span>Annulla / ripeti</span>
     <kbd>Ctrl C V D</kbd><span>Copia, incolla, duplica</span>
     <kbd>Frecce</kbd><span>Sposta di un passo (⇧ più veloce)</span>
+    <kbd>M</kbd><span>Attributi al seguito dell'entità</span>
     <kbd>Spazio + trascina</kbd><span>Sposta la vista</span>
     <kbd>Ctrl + rotella</kbd><span>Zoom · <kbd>F</kbd> adatta</span>
     <kbd>Ctrl S / O / E</kbd><span>Salva, apri, esporta</span>
@@ -1665,7 +1678,14 @@ $('#zOut').addEventListener('click', () => zoomCenter(1 / 1.2));
 $('#zoomLbl').addEventListener('click', () => zoomCenter(1 / view.k));
 $('#zFit').addEventListener('click', fit);
 $('#zGrid').addEventListener('click', () => { snap = !snap; $('#zGrid').classList.toggle('on', snap); svg.classList.toggle('nogrid', !snap); toast(snap ? 'Griglia e aggancio attivi' : 'Griglia disattivata'); persist(); });
-document.querySelectorAll('.tool').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+document.querySelectorAll('.tool[data-tool]').forEach(b => b.addEventListener('click', () => setTool(b.dataset.tool)));
+function setMoveAttrs(on) {
+  moveAttrs = on;
+  const b = $('#optMoveAttrs'); b.classList.toggle('on', on); b.setAttribute('aria-pressed', on);
+  try { localStorage.setItem(MOVEATTRS_KEY, on ? '1' : '0'); } catch (e) {}
+}
+$('#optMoveAttrs').addEventListener('click', () => { setMoveAttrs(!moveAttrs); toast(moveAttrs ? 'Gli attributi seguono l\'entità' : 'Gli attributi restano fermi'); });
+try { setMoveAttrs(localStorage.getItem(MOVEATTRS_KEY) === '1'); } catch (e) { setMoveAttrs(false); }
 
 function setNotation(nt, quiet) {
   notation = nt === 'chen' ? 'chen' : 'batini';
