@@ -388,7 +388,7 @@ let pendingConnect = null; // id del nodo di partenza
 let spaceDown = false;
 let gesture = null;
 let notation = 'batini'; // 'batini' | 'chen'
-let idMarks = { filled: new Set(), svg: '' };
+let idMarks = { filled: new Set(), bars: new Set(), svg: '' };
 const isB = () => notation === 'batini';
 
 const $ = s => document.querySelector(s);
@@ -398,6 +398,16 @@ const stage = $('#stage'), panel = $('#panel');
 function emptyDoc(name = 'Nuovo progetto') { return { app: 'studio-er', version: 1, name, nodes: [], edges: [] }; }
 const uid = p => p + Date.now().toString(36).slice(-5) + (seq++).toString(36) + Math.random().toString(36).slice(2, 5);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Entità in MAIUSCOLO e attributi in minuscolo, senza accenti e con _ al posto degli spazi.
+// Durante la digitazione (done = false) non toglie gli spazi in fondo, così il cursore non salta.
+function normLabel(type, v, done = true) {
+  let s = String(v ?? '');
+  if (type !== 'entity' && type !== 'attribute') return s;
+  s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC');
+  if (done) s = s.trim();
+  s = s.replace(/\s/g, '_');
+  return type === 'entity' ? s.toUpperCase() : s.toLowerCase();
+}
 const byId = id => doc.nodes.find(n => n.id === id);
 const edgeById = id => doc.edges.find(e => e.id === id);
 const r1 = v => Math.round(v * 10) / 10;
@@ -617,9 +627,17 @@ function edgeSVG(e, groups, selected, forExport) {
     const p = bez(g, t); let dv = bezD(g, t); let dl = Math.hypot(dv.x, dv.y) || 1;
     let ux = dv.x / dl * (end === 'from' ? 1 : -1), uy = dv.y / dl * (end === 'from' ? 1 : -1);
     let nx = -uy, ny = ux; if (ny > 0.2 || (Math.abs(ny) <= 0.2 && nx < 0)) { nx = -nx; ny = -ny; }
-    const tw2 = tw(e.card, 600, 12.5) / 2 + 4;
-    const away = isB() ? 26 : 12; // in Batini resta oltre la barra dell'identificatore
-    const lx = p.x + ux * (away + Math.abs(ux) * tw2) + nx * (10 + Math.abs(nx) * tw2 * 0.6), ly = p.y + uy * (away + 2) + ny * 12;
+    // L'etichetta sta subito fuori dal bordo dell'entità, di lato alla linea: si allontana solo
+    // quanto basta per non toccare l'entità (o la barra dell'identificatore, se c'è)
+    const hw = tw(e.card, 600, 12.5) / 2 + 3, hh = 8;
+    const ext = (vx, vy) => hw * Math.abs(vx) + hh * Math.abs(vy);
+    const pad = idMarks.bars.has(node.id) ? 26 : 4;
+    const side = 4 + ext(nx, ny);
+    let lx, ly;
+    for (let along = 4 + ext(ux, uy); along < 200; along += 2) {
+      lx = p.x + ux * along + nx * side; ly = p.y + uy * along + ny * side;
+      if (Math.abs(lx - node.x) >= nsz.w / 2 + pad + hw || Math.abs(ly - node.y) >= nsz.h / 2 + pad + hh) break;
+    }
     s += `<text class="card" x="${r1(lx)}" y="${r1(ly)}">${esc(e.card)}</text>`;
   }
   if (e.role) {
@@ -637,8 +655,8 @@ function exitPoint(n, to) {
 }
 // Batini: pallino pieno per l'identificatore semplice, barra con pallino per quello composto o esterno
 function identifierMarks() {
-  const filled = new Set(), parts = [];
-  if (!isB()) return { filled, svg: '' };
+  const filled = new Set(), bars = new Set(), parts = [];
+  if (!isB()) return { filled, bars, svg: '' };
   for (const E of doc.nodes) {
     if (E.type !== 'entity') continue;
     const links = nb(E.id);
@@ -676,9 +694,10 @@ function identifierMarks() {
     }
     const dot = { x: last.x + last.tan[0] * 12, y: last.y + last.tan[1] * 12 };
     d += ` L${r1(dot.x)},${r1(dot.y)}`;
+    bars.add(E.id);
     parts.push(`<path class="idbar" d="${d}"/><circle class="iddot" cx="${r1(dot.x)}" cy="${r1(dot.y)}" r="4.5"/>`);
   }
-  return { filled, svg: parts.join('') };
+  return { filled, bars, svg: parts.join('') };
 }
 
 function renderCanvas() {
@@ -736,7 +755,7 @@ const snapV = v => snap ? Math.round(v / GRID) * GRID : v;
 /* ---------- Creazione ---------- */
 const DEFAULTS = {
   entity: () => ({ label: 'Entità', weak: false }),
-  weak: () => ({ label: 'EntitàDebole', weak: true }),
+  weak: () => ({ label: 'Entità debole', weak: true }),
   relationship: () => ({ label: 'Relazione', identifying: false }),
   attribute: () => ({ label: 'attributo', key: false, partial: false, multi: false, derived: false, optional: false, dtype: 'VARCHAR(100)' }),
   isa: () => ({ label: 'ISA', total: false, disjoint: true, parent: '' }),
@@ -745,9 +764,11 @@ const DEFAULTS = {
 function makeNode(kind, x, y, extra = {}) {
   const type = kind === 'weak' ? 'entity' : kind;
   const n = { id: uid('n'), type, x: snapV(x), y: snapV(y), ...DEFAULTS[kind](), ...extra };
+  n.label = normLabel(type, n.label);
   doc.nodes.push(n); return n;
 }
 function uniqueLabel(base, type) {
+  base = normLabel(type, base);
   const names = new Set(doc.nodes.filter(n => n.type === type).map(n => n.label));
   if (!names.has(base)) return base; let i = 2; while (names.has(base + i)) i++; return base + i;
 }
@@ -782,7 +803,7 @@ function addAttributeTo(ownerId, opts = {}) {
   const owner = byId(ownerId); if (!owner) return;
   checkpoint();
   const p = freeSpotAround(owner);
-  const a = makeNode('attribute', p.x, p.y, { label: opts.key ? 'id' + owner.label.replace(/\s+/g, '') : uniqueLabel('attributo', 'attribute'), key: !!opts.key });
+  const a = makeNode('attribute', p.x, p.y, { label: opts.key ? 'id_' + owner.label : uniqueLabel('attributo', 'attribute'), key: !!opts.key });
   connect(owner.id, a.id, true);
   sel = new Set([a.id]); commit();
   startInlineEdit(a.id);
@@ -852,7 +873,7 @@ svg.addEventListener('pointerdown', ev => {
     const id = nodeEl.dataset.node;
     if (ev.shiftKey || ev.metaKey || ev.ctrlKey) { sel.has(id) ? sel.delete(id) : sel.add(id); }
     else if (!sel.has(id)) sel = new Set([id]);
-    const ids = [...sel].filter(byId);
+    const ids = withAttrs([...sel].filter(byId));
     gesture = { kind: 'drag', start: p, ids, orig: ids.map(i => { const n = byId(i); return { id: i, x: n.x, y: n.y }; }), anchor: id, moved: false };
     renderCanvas(); renderPanel();
     return;
@@ -999,7 +1020,13 @@ function startInlineEdit(id) {
     if (e.key === 'Escape') { inlineEl.cancel = true; commitInlineEdit(); }
     else if (e.key === 'Enter' && (!isNote || e.metaKey || e.ctrlKey)) { e.preventDefault(); commitInlineEdit(); }
   });
+  el.addEventListener('input', () => liveLabel(el, n.type));
   el.addEventListener('blur', () => commitInlineEdit());
+}
+// Applica la normalizzazione mentre si scrive, lasciando il cursore dov'era
+function liveLabel(el, type) {
+  const v = normLabel(type, el.value, false); if (v === el.value) return;
+  const a = el.selectionStart, b = el.selectionEnd; el.value = v; el.setSelectionRange(a, b);
 }
 function commitInlineEdit() {
   if (!inlineEl) return;
@@ -1008,7 +1035,7 @@ function commitInlineEdit() {
   el.remove();
   if (!cancel && n && v && v !== orig) { checkpoint(); n.label = v; commit(); }
 }
-const isNoteVal = (n, v) => n?.type === 'note' ? v.replace(/\s+$/, '') : v.trim();
+const isNoteVal = (n, v) => n?.type === 'note' ? v.replace(/\s+$/, '') : normLabel(n?.type, v).trim();
 
 /* ---------- Tastiera ---------- */
 const typing = el => el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
@@ -1032,7 +1059,7 @@ document.addEventListener('keydown', ev => {
   if (ev.key === 'Escape') { if (pendingConnect) { pendingConnect = null; gOver.innerHTML = ''; renderCanvas(); } else if (tool !== 'select') setTool('select'); else { sel.clear(); commit(); } return; }
   if (ev.key === 'Enter' || ev.key === 'F2') { const ids = [...sel].filter(byId); if (ids.length === 1) { ev.preventDefault(); startInlineEdit(ids[0]); } return; }
   if (ev.key.startsWith('Arrow')) {
-    const ids = [...sel].filter(byId); if (!ids.length) return; ev.preventDefault();
+    const ids = withAttrs([...sel].filter(byId)); if (!ids.length) return; ev.preventDefault();
     const d = ev.shiftKey ? GRID : (snap ? GRID / 2 : 2);
     const dx = ev.key === 'ArrowLeft' ? -d : ev.key === 'ArrowRight' ? d : 0, dy = ev.key === 'ArrowUp' ? -d : ev.key === 'ArrowDown' ? d : 0;
     checkpoint(); ids.forEach(i => { const n = byId(i); n.x += dx; n.y += dy; }); commit(); return;
@@ -1071,6 +1098,12 @@ function paste() {
 }
 
 /* ---------- Analisi del modello ---------- */
+// Entità e relazioni si portano dietro i loro attributi, compresi i sotto-attributi
+function withAttrs(ids) {
+  const out = new Set(ids), stack = ids.filter(i => ['entity', 'relationship'].includes(byId(i)?.type));
+  while (stack.length) for (const { o } of nb(stack.pop())) if (o.type === 'attribute' && !out.has(o.id)) { out.add(o.id); stack.push(o.id); }
+  return [...out];
+}
 function nb(id) { return doc.edges.filter(e => e.from === id || e.to === id).map(e => ({ e, o: byId(e.from === id ? e.to : e.from) })).filter(x => x.o); }
 function ownerOfAttr(a, seen = new Set()) {
   seen.add(a.id);
@@ -1452,6 +1485,7 @@ panel.addEventListener('input', ev => {
   const el = ev.target; if (!el.dataset.prop || el.type === 'checkbox' || el.tagName === 'SELECT') return;
   const o = objOf(el.dataset.id); if (!o) return;
   if (!fieldDirty) { checkpoint(); fieldDirty = true; }
+  if (el.dataset.prop === 'label') liveLabel(el, o.type);
   o[el.dataset.prop] = el.value;
   renderCanvas(); persist();
   if (el.dataset.prop === 'card') el.parentElement.querySelectorAll('.chip').forEach(c => c.classList.toggle('on', c.dataset.val === el.value));
@@ -1465,7 +1499,7 @@ panel.addEventListener('change', ev => {
     if (el.dataset.prop === 'partial' && el.checked) o.key = false;
     if (el.dataset.prop === 'derived' && el.checked) o.key = false;
     commit();
-  } else if (el.dataset.prop === 'label' && !String(el.value).trim()) { o.label = TYPE_NAME[o.type] || 'Senza nome'; commit(); }
+  } else if (el.dataset.prop === 'label') { o.label = normLabel(o.type, String(el.value).trim() ? el.value : TYPE_NAME[o.type] || 'Senza nome'); commit(); }
   else renderPanel();
 });
 panel.addEventListener('click', ev => {
@@ -1525,7 +1559,7 @@ function saveProject() {
 }
 function sanitize(d) {
   if (!d || !Array.isArray(d.nodes) || !Array.isArray(d.edges)) throw new Error('Il file non contiene un progetto Studio ER (mancano nodes ed edges).');
-  const nodes = d.nodes.filter(n => n && TYPES.includes(n.type) && isFinite(n.x) && isFinite(n.y)).map(n => ({ ...DEFAULTS[n.type](), ...n, id: String(n.id), label: String(n.label ?? ''), x: +n.x, y: +n.y }));
+  const nodes = d.nodes.filter(n => n && TYPES.includes(n.type) && isFinite(n.x) && isFinite(n.y)).map(n => ({ ...DEFAULTS[n.type](), ...n, id: String(n.id), label: normLabel(n.type, n.label), x: +n.x, y: +n.y }));
   const ids = new Set(nodes.map(n => n.id));
   const edges = d.edges.filter(e => e && ids.has(String(e.from)) && ids.has(String(e.to))).map(e => ({ id: String(e.id || uid('e')), from: String(e.from), to: String(e.to), card: String(e.card ?? ''), total: !!e.total, role: String(e.role ?? '') }));
   return { app: 'studio-er', version: 1, name: String(d.name || 'Progetto importato'), nodes, edges };
@@ -1601,7 +1635,7 @@ function loadExample(withUndo) {
   if (withUndo) checkpoint();
   const N = (id, type, label, x, y, extra = {}) => ({ id, type, x, y, ...DEFAULTS[type === 'entity' && extra.weak ? 'weak' : type](), label, ...extra });
   const E = (from, to, card = '', extra = {}) => ({ id: 'e_' + from + '_' + to, from, to, card, total: false, role: '', ...extra });
-  doc = {
+  doc = sanitize({
     app: 'studio-er', version: 1, name: 'Esempio · Scuola',
     nodes: [
       N('stu', 'entity', 'Studente', 220, 320),
@@ -1636,7 +1670,7 @@ function loadExample(withUndo) {
       E('cor', 'pre', '(0,N)'), E('pre', 'lez', '(1,1)', { total: true }),
       E('lez', 'a_dat'), E('lez', 'a_aula')
     ]
-  };
+  });
   sel.clear(); afterLoad(); requestAnimationFrame(fit);
   if (withUndo) toast('Esempio caricato · Ctrl+Z per tornare indietro');
 }
