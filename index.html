@@ -433,9 +433,10 @@ function lolli(n) {
   const own = nb(n.id).map(x => x.o).find(o => o.type !== 'note');
   const dx = own ? n.x - own.x : 0, dy = own ? n.y - own.y : -1;
   const txt = attrText(n), w = tw(txt, 400, 13);
+  const side = n.lab || (Math.abs(dx) >= Math.abs(dy) * 0.7 ? (dx >= 0 ? 'right' : 'left') : (dy < 0 ? 'top' : 'bottom'));
   let anchor, tx, ty;
-  if (Math.abs(dx) >= Math.abs(dy) * 0.7) { anchor = dx >= 0 ? 'start' : 'end'; tx = n.x + (dx >= 0 ? 11 : -11); ty = n.y; }
-  else { anchor = 'middle'; tx = n.x; ty = n.y + (dy < 0 ? -16 : 16); }
+  if (side === 'right' || side === 'left') { anchor = side === 'right' ? 'start' : 'end'; tx = n.x + (side === 'right' ? 11 : -11); ty = n.y; }
+  else { anchor = 'middle'; tx = n.x; ty = n.y + (side === 'top' ? -16 : 16); }
   const x1 = anchor === 'start' ? tx : anchor === 'end' ? tx - w : tx - w / 2;
   return { txt, anchor, tx, ty, x1, x2: x1 + w, y1: ty - 9, y2: ty + 9 };
 }
@@ -789,25 +790,62 @@ function connect(aId, bId, silent) {
   const e = { id: uid('e'), from: aId, to: bId, card: '', total: false, role: '' };
   doc.edges.push(e); return e;
 }
-function freeSpotAround(owner) {
-  const { w, h } = size(owner); const gap = isB() ? 45 : 70;
-  for (const rad of [Math.max(w, h) / 2 + gap, Math.max(w, h) / 2 + gap + 55, Math.max(w, h) / 2 + gap + 110]) {
-    for (let i = 0; i < 16; i++) {
-      const ang = -Math.PI / 2 + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 8);
-      const x = owner.x + Math.cos(ang) * rad * 1.15, y = owner.y + Math.sin(ang) * rad * 0.8;
-      if (!doc.nodes.some(n => Math.abs(n.x - x) < (size(n).w / 2 + 50) && Math.abs(n.y - y) < (size(n).h / 2 + 26))) return { x, y };
-    }
-  }
-  return { x: owner.x + 40, y: owner.y - 120 };
-}
 function addAttributeTo(ownerId, opts = {}) {
   const owner = byId(ownerId); if (!owner) return;
   checkpoint();
-  const p = freeSpotAround(owner);
-  const a = makeNode('attribute', p.x, p.y, { label: opts.key ? 'id_' + owner.label : uniqueLabel('attributo', 'attribute'), key: !!opts.key });
+  const a = makeNode('attribute', owner.x, owner.y, { label: opts.key ? 'id_' + owner.label : uniqueLabel('attributo', 'attribute'), key: !!opts.key });
   connect(owner.id, a.id, true);
+  arrangeAttrs(owner);
   sel = new Set([a.id]); commit();
   startInlineEdit(a.id);
+}
+
+// Dispone in ordine gli attributi semplici di un'entità o relazione: in colonna a destra o a
+// sinistra, oppure in riga sopra o sotto, scegliendo i lati liberi dai collegamenti.
+// Le chiavi vengono per prime, poi gli altri nell'ordine in cui sono stati creati.
+function arrangeAttrs(owner) {
+  if (!owner || !['entity', 'relationship'].includes(owner.type)) return;
+  const links = nb(owner.id);
+  const simple = a => !nb(a.id).some(x => x.o.type === 'attribute');
+  const attrs = links.filter(x => x.o.type === 'attribute' && simple(x.o)).map(x => x.o)
+    .sort((a, b) => (!!b.key - !!a.key) || (!!b.partial - !!a.partial) || doc.nodes.indexOf(a) - doc.nodes.indexOf(b));
+  if (!attrs.length) return;
+  const B = isB(), { w, h } = size(owner);
+  const busy = { right: 0, left: 0, top: 0, bottom: 0 };
+  for (const { o } of links) {
+    if (o.type === 'note' || attrs.includes(o)) continue;
+    const dx = (o.x - owner.x) / (w / 2), dy = (o.y - owner.y) / (h / 2);
+    busy[Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'right' : 'left') : (dy >= 0 ? 'bottom' : 'top')]++;
+  }
+  const cap = { right: 6, left: 6, top: 4, bottom: 4 };
+  const sides = ['right', 'left', 'top', 'bottom'].sort((a, b) => busy[a] - busy[b]);
+  // quanti lati servono, poi gli attributi si dividono in parti uguali tra quei lati
+  let need = 0, room = 0; while (need < 4 && room < attrs.length) room += cap[sides[need++]];
+  const used = sides.slice(0, need), groups = {}; let i = 0;
+  used.forEach((s, k) => {
+    const n = k === used.length - 1 ? attrs.length - i : Math.min(cap[s], Math.ceil((attrs.length - i) / (used.length - k)));
+    groups[s] = attrs.slice(i, i += n);
+  });
+  // le righe sopra e sotto stanno oltre l'ingombro delle colonne, così non si toccano negli angoli
+  const step = B ? 26 : 46;
+  const colHalf = Math.max(0, ...['left', 'right'].map(s => groups[s] ? (groups[s].length - 1) / 2 * step : 0));
+  for (const [s, list] of Object.entries(groups)) {
+    const dir = s === 'right' || s === 'bottom' ? 1 : -1;
+    if (s === 'right' || s === 'left') {
+      list.forEach((a, j) => { a.x = owner.x + dir * (w / 2 + (B ? 34 : 30 + size(a).w / 2)); a.y = owner.y + (j - (list.length - 1) / 2) * step; });
+    } else {
+      const ws = list.map(a => (B ? tw(attrText(a), 400, 13) : size(a).w) + 24), tot = ws.reduce((p, c) => p + c, 0);
+      const dist = Math.max(h / 2 + (B ? 34 : 50), colHalf + (B ? 40 : 60));
+      let x = owner.x - tot / 2;
+      list.forEach((a, j) => { a.x = x + ws[j] / 2; x += ws[j]; a.y = owner.y + dir * dist; });
+    }
+    list.forEach(a => { a.lab = s; });
+  }
+}
+// Un attributo spostato da solo (senza il suo proprietario) torna a scegliere da sé il lato dell'etichetta
+function freeLabels(ids) {
+  const moved = new Set(ids);
+  for (const id of ids) { const n = byId(id); if (n?.type === 'attribute' && sel.has(id) && !moved.has(ownerOfAttr(n)?.id)) delete n.lab; }
 }
 
 /* ---------- Strumenti ---------- */
@@ -930,7 +968,7 @@ function endPointer(ev) {
   if (!gesture) return;
   const g = gesture; gesture = null;
   if (g.kind === 'pan') { persist(); return; }
-  if (g.kind === 'drag') { if (g.moved) { renderPanel(); persist(); } return; }
+  if (g.kind === 'drag') { if (g.moved) { freeLabels(g.ids); renderCanvas(); renderPanel(); persist(); } return; }
   if (g.kind === 'box') { gOver.innerHTML = ''; renderPanel(); return; }
   if (g.kind === 'connect' && g.moved) {
     const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-node]');
@@ -950,7 +988,11 @@ function finishConnect(a, b) {
   if (err) { toast(err, true); renderCanvas(); return; }
   checkpoint();
   const e = connect(a, b, true);
-  if (e) { sel = new Set([e.id]); commit(); toast('Collegamento creato'); }
+  if (e) {
+    const owner = [A, B].find(n => n.type === 'entity' || n.type === 'relationship'), attr = [A, B].find(n => n.type === 'attribute');
+    if (owner && attr) arrangeAttrs(owner);
+    sel = new Set([e.id]); commit(); toast('Collegamento creato');
+  }
 }
 
 /* Pinch */
@@ -1063,7 +1105,7 @@ document.addEventListener('keydown', ev => {
     const ids = withAttrs([...sel].filter(byId)); if (!ids.length) return; ev.preventDefault();
     const d = ev.shiftKey ? GRID : (snap ? GRID / 2 : 2);
     const dx = ev.key === 'ArrowLeft' ? -d : ev.key === 'ArrowRight' ? d : 0, dy = ev.key === 'ArrowUp' ? -d : ev.key === 'ArrowDown' ? d : 0;
-    checkpoint(); ids.forEach(i => { const n = byId(i); n.x += dx; n.y += dy; }); commit(); return;
+    checkpoint(); ids.forEach(i => { const n = byId(i); n.x += dx; n.y += dy; }); freeLabels(ids); commit(); return;
   }
   const map = { v: 'select', h: 'hand', e: 'entity', w: 'weak', r: 'relationship', a: 'attribute', g: 'isa', n: 'note', c: 'connect' };
   if (map[k]) { setTool(map[k]); return; }
@@ -1077,10 +1119,13 @@ document.addEventListener('keyup', ev => { if (ev.key === ' ') { spaceDown = fal
 function deleteSel() {
   if (!sel.size) return;
   checkpoint();
-  const nodeIds = new Set([...sel].filter(byId));
+  const nodeIds = new Set(withAttrs([...sel].filter(byId)));
+  // gli attributi rimasti si ridispongono attorno al loro proprietario
+  const owners = new Set([...nodeIds].map(i => byId(i)).filter(n => n.type === 'attribute').map(a => ownerOfAttr(a)).filter(o => o && !nodeIds.has(o.id)));
   doc.nodes = doc.nodes.filter(n => !nodeIds.has(n.id));
   doc.edges = doc.edges.filter(e => !sel.has(e.id) && !nodeIds.has(e.from) && !nodeIds.has(e.to));
   doc.nodes.forEach(n => { if (n.type === 'isa' && nodeIds.has(n.parent)) n.parent = ''; });
+  owners.forEach(arrangeAttrs);
   const c = sel.size; sel.clear(); commit(); toast(c > 1 ? `${c} elementi eliminati` : 'Elemento eliminato');
 }
 function copySel() {
