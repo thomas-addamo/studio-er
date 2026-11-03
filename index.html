@@ -4,6 +4,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Studio ER</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230B7A75'/%3E%3Crect x='5' y='6' width='12' height='8' rx='1' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cpath d='M17 18l5-4 5 4-5 4z' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M11 14v8h6' fill='none' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
@@ -1445,17 +1446,23 @@ function checkPanel() {
   if (!issues.length) return head + '<div class="okmsg">Nessun problema trovato.</div>';
   return head + `<ul class="issues">${issues.map(i => `<li><button class="issue${i.lvl === 'err' ? ' err' : ''}" data-act="select" data-id="${i.id}"><i></i><span>${esc(i.title)}<small>${esc(i.detail)}</small></span></button></li>`).join('')}</ul>`;
 }
-let lastSQL = '', lastRel = '';
+let lastSQL = '', lastRel = '', lastMD = '';
+const mdOf = (tables, name) => `# Schema logico${name ? ' · ' + name : ''}\n\n` + tables.map(t => {
+  const fk = c => t.fks.filter(f => f.cols.includes(c.name)).map(f => `FK → ${f.ref}.${f.refCols[f.cols.indexOf(c.name)]}`);
+  const rows = t.cols.map(c => `| ${t.pk.includes(c.name) ? `<u>${c.name}</u>` : fk(c).length ? `<em style="color:#0B7A75">${c.name}</em>` : c.name} | ${c.type} | ${[t.pk.includes(c.name) ? 'PK' : '', ...fk(c), c.nullable ? '' : 'NOT NULL'].filter(Boolean).join(', ')} |`);
+  return `## ${t.name}\n\n| Colonna | Tipo | Vincoli |\n|---|---|---|\n${rows.join('\n')}`;
+}).join('\n\n') + '\n';
 function schemaPanel() {
   const { tables, notes } = translate();
   if (!tables.length) return '<h3>Schema logico</h3><p class="sub">Aggiungi delle entità per generare le tabelle.</p>';
   lastSQL = sqlOf(tables);
+  lastMD = mdOf(tables, doc.name);
   lastRel = tables.map(t => `${t.name}(${t.cols.map(c => (t.pk.includes(c.name) ? '_' + c.name + '_' : c.name) + (t.fks.some(f => f.cols.includes(c.name)) ? '*' : '')).join(', ')})`).join('\n');
   const fkList = tables.flatMap(t => t.fks.map(f => `<div>${esc(t.name)}.${esc(f.cols.join(', '))} → ${esc(f.ref)}.${esc(f.refCols.join(', '))}</div>`)).join('');
   return `<h3>Schema logico</h3><p class="sub">Traduzione automatica del diagramma in tabelle relazionali. Controllala prima di usarla.</p>
   <div class="eyebrow">Schema relazionale</div><div class="rel">${relationalHTML(tables)}</div>
   <p class="note-s"><u>Sottolineato</u>: chiave primaria · <em style="color:var(--accent)">corsivo</em>: chiave esterna</p>
-  <div class="row mt"><button class="btn" data-act="copyrel">Copia schema</button></div>
+  <div class="row mt"><button class="btn" data-act="copyrel">Copia schema</button><button class="btn" data-act="copymd">Copia in Markdown</button></div>
   ${fkList ? `<div class="eyebrow">Vincoli di integrità referenziale</div><div class="rel">${fkList}</div>` : ''}
   ${notes.length ? `<div class="eyebrow">Note</div>${notes.map(n => `<p class="note-s">${esc(n)}</p>`).join('')}` : ''}
   <div class="eyebrow">SQL (CREATE TABLE)</div><pre class="sql" id="sqlOut">${esc(lastSQL)}</pre>
@@ -1524,6 +1531,7 @@ panel.addEventListener('click', ev => {
     }
     case 'example': loadExample(true); break;
     case 'copysql': copyText(lastSQL, 'SQL copiato'); break;
+    case 'copymd': copyText(lastMD, 'Markdown copiato'); break;
     case 'copyrel': copyText(lastRel, 'Schema copiato'); break;
     case 'savesql': saveFile(fileBase() + '.txt', lastSQL, 'text/plain'); break;
   }
