@@ -443,7 +443,7 @@ function lolli(n) {
 function extent(n) {
   const { w, h } = size(n);
   let x1 = n.x - w / 2, y1 = n.y - h / 2, x2 = n.x + w / 2, y2 = n.y + h / 2;
-  if (n.type === 'isa') { x2 += 40; y1 -= 18; }
+  if (n.type === 'isa') { x2 += 60; y1 -= 30; }
   if (isLolli(n)) { const L = lolli(n); x1 = Math.min(x1, L.x1); x2 = Math.max(x2, L.x2); y1 = Math.min(y1, L.y1); y2 = Math.max(y2, L.y2); }
   return { x1, y1, x2, y2 };
 }
@@ -492,7 +492,8 @@ function diagramCSS(p) {
 .edge.note-link{stroke-dasharray:4 4;stroke-width:1.2}
 .card{font:600 12.5px ${DFONT};fill:${p.card};text-anchor:middle;dominant-baseline:central;paint-order:stroke;stroke:${p.bg};stroke-width:4px;stroke-linejoin:round}
 .role{font:italic 400 12px ${DFONT};fill:${p.muted};text-anchor:middle;dominant-baseline:central;paint-order:stroke;stroke:${p.bg};stroke-width:4px}
-.isa-tag{font:500 11.5px ${DFONT};fill:${p.muted}}
+.n-isa .isa-tag{font:700 13px ${DFONT};letter-spacing:.02em;fill:${p.card};text-anchor:middle;dominant-baseline:central}
+.isa-pill{fill:${p.bg};stroke:${p.card};stroke-width:1.4}
 .sel .shape{stroke:${p.sel};stroke-width:2.6}
 .edge.sel{stroke:${p.sel}}
 .edge-hit{fill:none;stroke:transparent;stroke-width:14}
@@ -510,6 +511,13 @@ function diagramCSS(p) {
 .box{fill:${p.sel};fill-opacity:.08;stroke:${p.sel};stroke-dasharray:4 3}`;
 }
 
+// Copertura della generalizzazione, (t,e) e simili, in un riquadro ben leggibile:
+// (x, y) è l'angolo in basso a sinistra del riquadro
+function isaTag(n, x, y) {
+  const t = `(${n.total ? 't' : 'p'},${n.disjoint ? 'e' : 's'})`, w = tw(t, 700, 13) + 14, h = 22;
+  const title = `${n.total ? 'Totale' : 'Parziale'}, ${n.disjoint ? 'esclusiva' : 'sovrapposta'}`;
+  return `<g><title>${title}</title><rect class="isa-pill" x="${r1(x)}" y="${r1(y - h)}" width="${r1(w)}" height="${h}" rx="6"/><text class="isa-tag" x="${r1(x + w / 2)}" y="${r1(y - h / 2)}">${t}</text></g>`;
+}
 function nodeSVG(n, selected) {
   const { w, h } = size(n); const x = n.x, y = n.y, hw = w / 2, hh = h / 2;
   let s = '';
@@ -529,7 +537,7 @@ function nodeSVG(n, selected) {
     }
     if (n.type === 'isa') {
       s += `<circle class="hit" cx="${r1(x)}" cy="${r1(y)}" r="12"/><circle class="shape junction" cx="${r1(x)}" cy="${r1(y)}" r="3.5"/>`;
-      if (isaInfo(n).children.length >= 2) s += `<text class="isa-tag" x="${r1(x + 10)}" y="${r1(y - 12)}" style="text-anchor:start">(${n.total ? 't' : 'p'},${n.disjoint ? 'e' : 's'})</text>`;
+      s += isaTag(n, x + 12, y - 30);
       return `<g class="node n-isa${selected ? ' sel' : ''}" data-node="${n.id}">${s}</g>`;
     }
     if (n.type === 'entity') {
@@ -561,7 +569,7 @@ function nodeSVG(n, selected) {
     case 'isa': {
       s += `<polygon class="shape" points="${r1(x)},${r1(y - hh)} ${r1(x + hw)},${r1(y + hh)} ${r1(x - hw)},${r1(y + hh)}"/>`;
       s += `<text x="${r1(x)}" y="${r1(y + 10)}">${L}</text>`;
-      s += `<text class="isa-tag" x="${r1(x + hw * 0.62)}" y="${r1(y - hh * 0.35)}" style="text-anchor:start">(${n.total ? 't' : 'p'},${n.disjoint ? 'e' : 's'})</text>`;
+      s += isaTag(n, x + hw * 0.62 + 4, y - hh * 0.35 - 11);
       break;
     }
     case 'note': {
